@@ -2,14 +2,21 @@
 
 `csls-mcp` (C# Language Service - Model Context Protocol) is a long-running .NET 8 Console Application that provides a C# Language Service for AI agents. It leverages the Roslyn compiler platform to offer semantic understanding of C# code within a given workspace, integrating seamlessly with the Gemini CLI via the Model Context Protocol (MCP).
 
+The idea behind this MCP server is to provide agents with more efficient tools to use instead of searchText or readFile or tempt them to read more code efficiently rather than guessing what the code does or where things are, so features will be added or changed based on agent usage experience.
+
 ## 🎯 Objective
 
 The primary goal of `csls-mcp` is to enable AI agents to semantically interact with C# codebases. Instead of relying on textual search, agents can use `csls-mcp` to:
 
 -   **Resolve C# symbols:** Find classes, interfaces, methods, namespaces, properties, fields, etc.
--   **Find definitions and references:** Locate where a symbol is defined and where it is used.
+-   **Find references:** Locate where a symbol is used.
 -   **List members of types:** Enumerate methods, properties, and fields of a given class or interface.
 -   **Obtain exact source code:** Retrieve the precise source text of a symbol's declaration.
+
+TODO:
+
+-   **FindDeclaration:** Locate where a symbol is declared.
+
 
 This semantic understanding is crucial for tasks like intelligent code navigation, refactoring, bug fixing, and feature implementation by AI agents.
 
@@ -21,17 +28,7 @@ This semantic understanding is crucial for tasks like intelligent code navigatio
 -   **Workspace Management:** Maintains the loaded C# solution/project in memory.
 -   **Lifecycle:** Automatically started and stopped by the Gemini CLI.
 -   **Roslyn:** Uses `Microsoft.CodeAnalysis` and `MSBuildWorkspace` for all semantic operations.
--   **Performance:** Loads the solution once at startup and supports multiple concurrent read-only requests without reloading.
 
-## 📦 Deliverables
-
-This project provides:
-
--   The complete and functional source code for the `csls-mcp` server.
--   A `.csproj` file for a .NET 8 console application.
--   A clear folder structure.
--   A `README.md` (this file) with compilation, usage, and examples.
--   Clear comments within the code (will be added in a separate step).
 
 ## 🚀 How to Compile
 

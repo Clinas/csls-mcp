@@ -30,6 +30,11 @@ namespace csls_mcp
             WriteIndented = false // Keep JSON output compact for STDIO communication
         };
 
+        private static void Log(string message)
+        {
+            Console.Error.WriteLine($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff}] {message}");
+        }
+
         /// <summary>
         /// The main asynchronous entry point of the application.
         /// </summary>
@@ -54,7 +59,7 @@ namespace csls_mcp
 
             Console.SetError(errorWriter);
 
-            Console.Error.WriteLine("csls-mcp server started."); // Log server startup to stderr
+            Log("csls-mcp server started."); // Log server startup to stderr
 
             // Check for a --single-run argument to enable testing mode.
             // In single-run mode, the server processes one request and then exits.
@@ -69,11 +74,11 @@ namespace csls_mcp
             // Check if the workspace was loaded successfully.
             if (_currentSolution == null)
             {
-                Console.Error.WriteLine($"Error: Could not load solution or project from {workspacePath}");
+                Log($"Error: Could not load solution or project from {workspacePath}");
                 Environment.Exit(1); // Exit if workspace loading failed
             }
 
-            Console.Error.WriteLine($"Successfully loaded workspace: {_currentSolution.FilePath}"); // Log successful workspace load
+            Log($"Successfully loaded workspace: {_currentSolution.FilePath}"); // Log successful workspace load
 
             // Initialize the McpHandler with the loaded solution and JSON serialization options.
             var mcpHandler = new McpHandler(_currentSolution, _jsonSerializerOptions);
@@ -96,7 +101,7 @@ namespace csls_mcp
             // Note: WorkspaceFailed is obsolete; for production, consider RegisterWorkspaceFailedHandler.
             _workspace.WorkspaceFailed += (sender, e) =>
             {
-                Console.Error.WriteLine($"MSBuildWorkspace failed: {e.Diagnostic.Message}");
+                Log($"MSBuildWorkspace failed: {e.Diagnostic.Message}");
             };
 
             try
@@ -106,24 +111,24 @@ namespace csls_mcp
                     // Load a specific solution file (.sln)
                     if (workspacePath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
                     {
-                        Console.Error.WriteLine($"Loading solution: {workspacePath}");
+                        Log($"Loading solution: {workspacePath}");
                         _currentSolution = await _workspace.OpenSolutionAsync(workspacePath, null, CancellationToken.None);
                     }
                     // Load a specific project file (.csproj)
                     else if (workspacePath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
                     {
-                        Console.Error.WriteLine($"Loading project: {workspacePath}");
+                        Log($"Loading project: {workspacePath}");
                         var project = await _workspace.OpenProjectAsync(workspacePath, null, CancellationToken.None);
                         _currentSolution = project.Solution; // Get the solution containing the project
                     }
                     else
                     {
-                        Console.Error.WriteLine($"Unsupported file type for workspace: {workspacePath}. Expected .sln or .csproj");
+                        Log($"Unsupported file type for workspace: {workspacePath}. Expected .sln or .csproj");
                     }
                 }
                 else if (Directory.Exists(workspacePath))
                 {
-                    Console.Error.WriteLine($"Searching for .sln or .csproj in directory: {workspacePath}");
+                    Log($"Searching for .sln or .csproj in directory: {workspacePath}");
                     // Search for solution files recursively within the directory
                     var solutionFiles = Directory.EnumerateFiles(workspacePath, "*.sln", SearchOption.AllDirectories).ToList();
                     // Search for project files recursively within the directory
@@ -134,9 +139,9 @@ namespace csls_mcp
                         // If multiple solutions are found, load the first one and warn.
                         if (solutionFiles.Count > 1)
                         {
-                            Console.Error.WriteLine($"Warning: Multiple solution files found in {workspacePath}. Loading the first one: {solutionFiles.First()}");
+                            Log($"Warning: Multiple solution files found in {workspacePath}. Loading the first one: {solutionFiles.First()}");
                         }
-                        Console.Error.WriteLine($"Loading solution: {solutionFiles.First()}");
+                        Log($"Loading solution: {solutionFiles.First()}");
                         _currentSolution = await _workspace.OpenSolutionAsync(solutionFiles.First(), null, CancellationToken.None);
                     }
                     else if (projectFiles.Any())
@@ -144,27 +149,27 @@ namespace csls_mcp
                         // If multiple projects are found, load the first one and warn.
                          if (projectFiles.Count > 1)
                         {
-                            Console.Error.WriteLine($"Warning: Multiple project files found in {workspacePath}. Loading the first one: {projectFiles.First()}");
+                            Log($"Warning: Multiple project files found in {workspacePath}. Loading the first one: {projectFiles.First()}");
                         }
-                        Console.Error.WriteLine($"Loading project: {projectFiles.First()}");
+                        Log($"Loading project: {projectFiles.First()}");
                         var project = await _workspace.OpenProjectAsync(projectFiles.First(), null, CancellationToken.None);
                         _currentSolution = project.Solution; // Get the solution containing the project
                     }
                     else
                     {
-                        Console.Error.WriteLine($"No .sln or .csproj found in {workspacePath}");
+                        Log($"No .sln or .csproj found in {workspacePath}");
                     }
                 }
                 else
                 {
-                    Console.Error.WriteLine($"Workspace path does not exist: {workspacePath}");
+                    Log($"Workspace path does not exist: {workspacePath}");
                 }
             }
             catch (Exception ex)
             {
                 // Log any exceptions that occur during workspace loading.
-                Console.Error.WriteLine($"Exception while loading workspace: {ex.Message}");
-                Console.Error.WriteLine(ex.ToString());
+                Log($"Exception while loading workspace: {ex.Message}");
+                Log(ex.ToString());
             }
         }
 
@@ -176,7 +181,7 @@ namespace csls_mcp
         private static async Task ProcessStdioMessagesAsync(McpHandler mcpHandler, bool singleRun)
         {           
 
-            Console.Error.WriteLine("Starting STDIO message processing loop...");
+            Log("Starting STDIO message processing loop...");
             string line;
             // Continuously read lines from stdin until the stream is closed.
             while ((line = await Console.In.ReadLineAsync()) != null)
@@ -186,7 +191,7 @@ namespace csls_mcp
 
                 try
                 {
-                    Console.Error.WriteLine($"Received raw: {line}"); // Log raw incoming message
+                    Log($"Received raw: {line}"); // Log raw incoming message
                     // Attempt to deserialize the incoming JSON line into an McpRequest object.
                     request = JsonSerializer.Deserialize<McpRequest>(line, _jsonSerializerOptions);
                     if (request == null)
@@ -200,13 +205,13 @@ namespace csls_mcp
                 catch (JsonException ex)
                 {
                     // Handle JSON deserialization errors.
-                    Console.Error.WriteLine($"JSON deserialization error: {ex.Message}");
+                    Log($"JSON deserialization error: {ex.Message}");
                     response.Error = new McpError { Code = -32700, Message = "Parse Error", Data = ex.Message };
                 }
                 catch (Exception ex)
                 {
                     // Handle any other unexpected errors during request processing.
-                    Console.Error.WriteLine($"Unexpected error processing request: {ex.Message}");
+                    Log($"Unexpected error processing request: {ex.Message}");
                     response.Error = new McpError { Code = -32000, Message = "Server Error", Data = ex.ToString() };
                 }
 
@@ -216,17 +221,17 @@ namespace csls_mcp
                     string jsonResponse = JsonSerializer.Serialize(response, _jsonSerializerOptions);
                     await Console.Out.WriteLineAsync(jsonResponse);
                     await Console.Out.FlushAsync(); // Ensure the output is immediately written
-                    Console.Error.WriteLine($"Sent: {jsonResponse}"); // Log sent response
+                    Log($"Sent: {jsonResponse}"); // Log sent response
                 }
 
                 // If in single-run mode, break the loop and exit after the first request.
                 if (singleRun)
                 {
-                    Console.Error.WriteLine("Single run mode enabled. Exiting after first request.");
+                    Log("Single run mode enabled. Exiting after first request.");
                     break; 
                 }
             }
-            Console.Error.WriteLine("STDIO input stream closed. Exiting."); // Log when stdin stream closes
+            Log("STDIO input stream closed. Exiting."); // Log when stdin stream closes
         }
     }
 }

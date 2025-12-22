@@ -114,6 +114,12 @@ namespace csls_mcp
     {
         [JsonPropertyName("symbol")]
         public string Symbol { get; set; } // The name of the C# symbol.
+
+        [JsonPropertyName("page")]
+        public int Page { get; set; } = 1;
+
+        [JsonPropertyName("pageSize")]
+        public int PageSize { get; set; } = 10;
     }
 
     /// <summary>
@@ -147,12 +153,39 @@ namespace csls_mcp
     /// <summary>
     /// Output model for a single reference found by the 'findReferences' tool.
     /// </summary>
-    public class FindReferencesOutput
+    public class PaginatedOutput<T>
+    {
+        [JsonPropertyName("items")]
+        public List<T> Items { get; set; }
+
+        [JsonPropertyName("page")]
+        public int Page { get; set; }
+
+        [JsonPropertyName("pageSize")]
+        public int PageSize { get; set; }
+
+        [JsonPropertyName("totalPages")]
+        public int TotalPages { get; set; }
+
+        [JsonPropertyName("totalItems")]
+        public int TotalItems { get; set; }
+    }
+
+    public class FindReferencesOutput : PaginatedOutput<Location>
+    {
+    }
+
+    public class FindImplementationsOutput : PaginatedOutput<Location>
+    {
+    }
+
+    public class Location
     {
         [JsonPropertyName("file")]
-        public string File { get; set; } // The absolute path to the file where the reference is found.
+        public string File { get; set; }
+
         [JsonPropertyName("line")]
-        public int Line { get; set; } // The 1-indexed line number of the reference.
+        public int Line { get; set; }
     }
 
     /// <summary>

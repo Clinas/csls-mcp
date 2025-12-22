@@ -57,6 +57,9 @@ namespace csls_mcp
                     case "findReferences":
                         response.Result = await FindReferences(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions));
                         break;
+                    case "findImplementations":
+                        response.Result = await FindImplementations(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions));
+                        break;
                     case "listMembers":
                         response.Result = await ListMembers(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions));
                         break;
@@ -72,6 +75,9 @@ namespace csls_mcp
                                 break;
                             case "findReferences":
                                 response.Result = await FindReferences(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions));
+                                break;
+                            case "findImplementations":
+                                response.Result = await FindImplementations(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions));
                                 break;
                             case "listMembers":
                                 response.Result = await ListMembers(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions));
@@ -132,32 +138,38 @@ namespace csls_mcp
             return new GetToolDeclarationsOutput
             {
                 Tools = new List<ToolDeclaration>
-                {
-                    new ToolDeclaration
-                    {
-                        Name = "resolveSymbol",
-                        Description = "Resolves a C# symbol (class, interface, method, etc.) and returns its kind, name, namespace, file, and line number.",
-                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                    },
-                    new ToolDeclaration
-                    {
-                        Name = "getSymbolSource",
-                        Description = "Retrieves the exact source code of a given C# symbol.",
-                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                    },
-                    new ToolDeclaration
-                    {
-                        Name = "findReferences",
-                        Description = "Finds all references to a given C# symbol within the loaded workspace.",
-                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                    },
-                    new ToolDeclaration
-                    {
-                        Name = "listMembers",
-                        Description = "Lists methods, properties, and fields of a specified C# type.",
-                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                    }
-                }
+                                {
+                                    new ToolDeclaration
+                                    {
+                                        Name = "resolveSymbol",
+                                        Description = "Semantically resolves a C# symbol (class, interface, method, etc.) and returns its exact definition location. This is superior to text search as it avoids ambiguity and guarantees finding the correct definition.",
+                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
+                                    },
+                                    new ToolDeclaration
+                                    {
+                                        Name = "getSymbolSource",
+                                        Description = "Retrieves the exact source code block for a specific C# symbol declaration. Ideal for getting the body of a method or a class without reading and parsing an entire file.",
+                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
+                                    },
+                                    new ToolDeclaration
+                                    {
+                                        Name = "findReferences",
+                                        Description = "Semantically finds all references to a given C# symbol within the loaded workspace. Unlike text search, this will only find actual code references, ignoring comments and strings.",
+                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}, \"page\": {\"type\": \"integer\"}, \"pageSize\": {\"type\": \"integer\"}}, \"required\": [\"symbol\"]}")?.AsObject()
+                                    },
+                                    new ToolDeclaration
+                                    {
+                                        Name = "findImplementations",
+                                        Description = "Semantically finds all classes that implement a given C# interface. This is a powerful tool for understanding code architecture.",
+                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}, \"page\": {\"type\": \"integer\"}, \"pageSize\": {\"type\": \"integer\"}}, \"required\": [\"symbol\"]}")?.AsObject()
+                                    },
+                                    new ToolDeclaration
+                                    {
+                                        Name = "listMembers",
+                                        Description = "Lists methods, properties, and fields of a specified C# type.",
+                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
+                                    }
+                                }
             };
         }
 
@@ -257,10 +269,10 @@ namespace csls_mcp
         /// </summary>
         /// <param name="input">The input containing the symbol name.</param>
         /// <returns>A list of locations (file path and line number) where the symbol is referenced.</returns>
-        private async Task<List<FindReferencesOutput>> FindReferences(SymbolInput input)
+        private async Task<FindReferencesOutput> FindReferences(SymbolInput input)
         {
             var searchCancellationToken = CancellationToken.None;
-            var references = new List<FindReferencesOutput>();
+            var references = new List<Location>();
 
             // Find the symbol declaration using SymbolFinder.
             var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(
@@ -281,7 +293,7 @@ namespace csls_mcp
                     {
                         // Get the line position for the start of the reference's source span.
                         var lineSpan = location.Document.GetTextAsync(searchCancellationToken).Result.Lines.GetLinePosition(location.Location.SourceSpan.Start);
-                        references.Add(new FindReferencesOutput
+                        references.Add(new Location
                         {
                             File = location.Document.FilePath,
                             Line = lineSpan.Line + 1 // Convert 0-indexed Roslyn line to 1-indexed.
@@ -289,7 +301,63 @@ namespace csls_mcp
                     }
                 }
             }
-            return references;
+
+            var totalItems = references.Count;
+            var totalPages = (int)Math.Ceiling((double)totalItems / input.PageSize);
+            var itemsForPage = references.Skip((input.Page - 1) * input.PageSize).Take(input.PageSize).ToList();
+
+            return new FindReferencesOutput
+            {
+                Items = itemsForPage,
+                Page = input.Page,
+                PageSize = input.PageSize,
+                TotalItems = totalItems,
+                TotalPages = totalPages
+            };
+        }
+
+        private async Task<FindImplementationsOutput> FindImplementations(SymbolInput input)
+        {
+            var searchCancellationToken = CancellationToken.None;
+            var implementations = new List<Location>();
+
+            var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(
+                _solution, (name) => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), searchCancellationToken);
+
+            var exactMatch = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase));
+            ISymbol symbolToFind = exactMatch ?? foundSymbols.FirstOrDefault();
+
+            if (symbolToFind != null && symbolToFind is INamedTypeSymbol interfaceSymbol)
+            {
+                var implementationSymbols = await SymbolFinder.FindImplementationsAsync(interfaceSymbol, _solution, cancellationToken: searchCancellationToken);
+
+                foreach (var implementation in implementationSymbols)
+                {
+                    var location = implementation.Locations.FirstOrDefault(loc => loc.IsInSource);
+                    if (location != null && location.SourceTree != null)
+                    {
+                        var lineSpan = location.SourceTree.GetLineSpan(location.SourceSpan, searchCancellationToken);
+                        implementations.Add(new Location
+                        {
+                            File = location.SourceTree.FilePath,
+                            Line = lineSpan.StartLinePosition.Line + 1
+                        });
+                    }
+                }
+            }
+
+            var totalItems = implementations.Count;
+            var totalPages = (int)Math.Ceiling((double)totalItems / input.PageSize);
+            var itemsForPage = implementations.Skip((input.Page - 1) * input.PageSize).Take(input.PageSize).ToList();
+
+            return new FindImplementationsOutput
+            {
+                Items = itemsForPage,
+                Page = input.Page,
+                PageSize = input.PageSize,
+                TotalItems = totalItems,
+                TotalPages = totalPages
+            };
         }
 
         /// <summary>
