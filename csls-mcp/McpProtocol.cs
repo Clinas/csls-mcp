@@ -47,26 +47,10 @@ public class ToolResult
     public bool IsError { get; set; } = false;
 }
 
-// Old response structure (to be phased out)
-// public class McpResponse : McpMessage
-// {
-//     [JsonPropertyName("content")]
-//     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-//     public List<McpContent>? Content { get; set; }
-//
-//     [JsonPropertyName("isError")]
-//     public bool IsError { get; set; } = false;
-//
-//     [JsonPropertyName("error")]
-//     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-//     public McpError? Error { get; set; }
-// }
 
 // Polymorphic content items
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(McpTextContent), typeDiscriminator: "text")]
-[JsonDerivedType(typeof(McpCodeContent), typeDiscriminator: "code")]
-[JsonDerivedType(typeof(McpJsonContent), typeDiscriminator: "json")]
 public abstract class McpContent
 {
 }
@@ -180,6 +164,12 @@ public class ToolDeclaration
 
     [JsonPropertyName("inputSchema")]
     public required JsonObject InputSchema { get; set; }
+}
+
+public class GetToolDeclarationsOutput
+{
+    [JsonPropertyName("tools")]
+    public List<ToolDeclaration> Tools { get; set; } 
 }
 
 // Common input and data structures

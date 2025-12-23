@@ -59,14 +59,14 @@ public class McpHandler
             {
                 Result = Initialize(request.Params.Deserialize<InitializeParams>(_jsonSerializerOptions))
             },
-            "tools/list" => new JsonRpcResultResponse<List<ToolDeclaration>> 
+            "tools/list" => new JsonRpcResultResponse<GetToolDeclarationsOutput>
             {
-                Result = GetToolDeclarations()
+                Result = new() { Tools = GetToolDeclarations() }
             },
             // This is a legacy/alternative name for tools/list.
-            "getToolDeclarations" => new JsonRpcResultResponse<List<ToolDeclaration>> 
+            "getToolDeclarations" => new JsonRpcResultResponse<GetToolDeclarationsOutput> 
             {
-                Result = GetToolDeclarations()
+                Result = new() { Tools = GetToolDeclarations() }
             },
             "tools/call" => new JsonRpcResultResponse<ToolResult>
             {
@@ -168,7 +168,7 @@ public class McpHandler
                 file = location.SourceTree.FilePath,
                 line = lineSpan.StartLinePosition.Line + 1
             };
-            return new ToolResult { Content = new List<McpContent> { new McpJsonContent { Json = result } } };
+            return new ToolResult { Content = new List<McpContent> { new McpTextContent { Text = JsonSerializer.Serialize(result) } } };
         }
 
         return new ToolResult
@@ -189,7 +189,7 @@ public class McpHandler
         if (symbol?.DeclaringSyntaxReferences.FirstOrDefault() is { } declaringReference)
         {
             var syntaxNode = await declaringReference.GetSyntaxAsync(cancellationToken);
-            return new ToolResult { Content = new List<McpContent> { new McpCodeContent { Code = syntaxNode.ToFullString() } } };
+            return new ToolResult { Content = new List<McpContent> { new McpTextContent { Text = syntaxNode.ToFullString() } } };
         }
         
         return new ToolResult
@@ -290,7 +290,7 @@ public class McpHandler
         }
         
         var result = new { methods, properties, fields };
-        return new ToolResult { Content = new List<McpContent> { new McpJsonContent { Json = result } } };
+        return new ToolResult { Content = new List<McpContent> { new McpTextContent { Text = JsonSerializer.Serialize(result) } } };
     }
     
     private ToolResult CreatePaginatedResult<T>(List<T> items, int page, int pageSize)
@@ -308,6 +308,6 @@ public class McpHandler
             TotalPages = totalPages
         };
         
-        return new ToolResult { Content = new List<McpContent> { new McpJsonContent { Json = paginatedResult } } };
+        return new ToolResult { Content = new List<McpContent> { new McpTextContent { Text = JsonSerializer.Serialize( paginatedResult) } } };
     }
 }
