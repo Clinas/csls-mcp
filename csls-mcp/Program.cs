@@ -179,15 +179,14 @@ namespace csls_mcp
         /// <param name="mcpHandler">The handler responsible for dispatching and executing MCP tools.</param>
         /// <param name="singleRun">If true, the loop exits after processing the first request.</param>
         private static async Task ProcessStdioMessagesAsync(McpHandler mcpHandler, bool singleRun)
-        {           
-
+        {
             Log("Starting STDIO message processing loop...");
             string line;
             // Continuously read lines from stdin until the stream is closed.
             while ((line = await Console.In.ReadLineAsync()) != null)
             {
-                McpResponse response = new McpResponse();
-                McpRequest request = null;
+                McpMessage? response = null;
+                McpRequest? request = null;
 
                 try
                 {
@@ -198,27 +197,35 @@ namespace csls_mcp
                     {
                         throw new JsonException("Deserialized request is null."); // Invalid request format
                     }
-                    
-                // Hand off the request to the McpHandler for processing.
+
+                    // Hand off the request to the McpHandler for processing.
                     response = await mcpHandler.HandleRequest(request);
                 }
                 catch (JsonException ex)
                 {
-                    // Handle JSON deserialization errors.
+                    // Handle JSON deserialization errors for the request.
                     Log($"JSON deserialization error: {ex.Message}");
-                    response.Error = new McpError { Code = -32700, Message = "Parse Error", Data = ex.Message };
+                    response = new JsonRpcErrorResponse
+                    {
+                        Id = TryGetIdFromRaw(line), // Attempt to get the ID for the response
+                        Error = new McpError { Code = -32700, Message = "Parse Error", Data = ex.Message }
+                    };
                 }
                 catch (Exception ex)
                 {
                     // Handle any other unexpected errors during request processing.
                     Log($"Unexpected error processing request: {ex.Message}");
-                    response.Error = new McpError { Code = -32000, Message = "Server Error", Data = ex.ToString() };
+                    response = new JsonRpcErrorResponse
+                    {
+                        Id = request?.Id,
+                        Error = new McpError { Code = -32603, Message = "Internal Server Error", Data = ex.ToString() }
+                    };
                 }
 
                 if (response != null)
                 {
-                    // Serialize the response object to JSON and send it to stdout.
-                    string jsonResponse = JsonSerializer.Serialize(response, _jsonSerializerOptions);
+                    // Serialize the response object to JSON using its actual runtime type and send it to stdout.
+                    string jsonResponse = JsonSerializer.Serialize(response, response.GetType(), _jsonSerializerOptions);
                     await Console.Out.WriteLineAsync(jsonResponse);
                     await Console.Out.FlushAsync(); // Ensure the output is immediately written
                     Log($"Sent: {jsonResponse}"); // Log sent response
@@ -228,10 +235,31 @@ namespace csls_mcp
                 if (singleRun)
                 {
                     Log("Single run mode enabled. Exiting after first request.");
-                    break; 
+                    break;
                 }
             }
             Log("STDIO input stream closed. Exiting."); // Log when stdin stream closes
+        }
+
+        private static object? TryGetIdFromRaw(string rawJson)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(rawJson);
+                if (doc.RootElement.TryGetProperty("id", out var idElement))
+                {
+                    if (idElement.ValueKind == JsonValueKind.String)
+                        return idElement.GetString();
+                    if (idElement.ValueKind == JsonValueKind.Number)
+                        return idElement.GetInt64();
+                    return idElement.ToString();
+                }
+            }
+            catch
+            {
+                // Ignore if parsing fails, we just can't get an ID.
+            }
+            return null;
         }
     }
 }

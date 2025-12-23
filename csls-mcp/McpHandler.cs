@@ -3,451 +3,311 @@ using Microsoft.CodeAnalysis.FindSymbols;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace csls_mcp
-{
-    /// <summary>
-    /// Handles incoming Model Context Protocol (MCP) requests and dispatches them to the appropriate Roslyn-based tools.
-    /// </summary>
-    public class McpHandler
-    {
-        private readonly Solution _solution; // The currently loaded Roslyn solution.
-        private readonly JsonSerializerOptions _jsonSerializerOptions; // JSON serialization options for consistency.
+namespace csls_mcp;
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="McpHandler"/> class.
-        /// </summary>
-        /// <param name="solution">The Roslyn solution to perform operations on.</param>
-        /// <param name="jsonSerializerOptions">JSON serialization options.</param>
-        public McpHandler(Solution solution, JsonSerializerOptions jsonSerializerOptions)
+/// <summary>
+/// Handles incoming Model Context Protocol (MCP) requests and dispatches them to the appropriate Roslyn-based tools.
+/// </summary>
+public class McpHandler
+{
+    private readonly Solution _solution;
+    private readonly JsonSerializerOptions _jsonSerializerOptions;
+
+    public McpHandler(Solution solution, JsonSerializerOptions jsonSerializerOptions)
+    {
+        _solution = solution ?? throw new ArgumentNullException(nameof(solution));
+        _jsonSerializerOptions = jsonSerializerOptions;
+    }
+
+    public async Task<McpMessage?> HandleRequest(McpRequest request)
+    {
+        if (request.Method == "notifications/initialized")
         {
-            _solution = solution ?? throw new ArgumentNullException(nameof(solution));
-            _jsonSerializerOptions = jsonSerializerOptions;
+            // Notifications do not get a response.
+            return null;
         }
 
-        /// <summary>
-        /// Handles a generic MCP request by dispatching it to the specific tool implementation.
-        /// </summary>
-        /// <param name="request">The incoming MCP request.</param>
-        /// <returns>An MCP response containing the tool's output or an error.</returns>
-        public async Task<McpResponse> HandleRequest(McpRequest request)
+        try
         {
-            var response = new McpResponse { Id = request.Id };
-
-            try
-            {
-                switch (request.Method)
-                {
-                    case "initialize":
-                        response.Result = Initialize(request.Params.Deserialize<InitializeParams>(_jsonSerializerOptions));
-                        break;
-                    case "notifications/initialized":
-                        return null; // This is a notification, so we don't send a response.
-                    case "tools/list":
-                        response.Result = GetToolDeclarations();
-                        break;
-                    case "getToolDeclarations":
-                        response.Result = GetToolDeclarations();
-                        break;
-                    case "resolveSymbol":
-                        response.Result = await ResolveSymbol(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                        break;
-                    case "getSymbolSource":
-                        response.Result = await GetSymbolSource(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                        break;
-                    case "findReferences":
-                        response.Result = await FindReferences(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                        break;
-                    case "findImplementations":
-                        response.Result = await FindImplementations(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                        break;
-                    case "listMembers":
-                        response.Result = await ListMembers(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                        break;
-                    case "tools/call":
-                        var toolCallParams = request.Params.Deserialize<ToolCallParams>(_jsonSerializerOptions);
-                        switch (toolCallParams.Name)
-                        {
-                            case "resolveSymbol":
-                                response.Result = await ResolveSymbol(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                                break;
-                            case "getSymbolSource":
-                                response.Result = await GetSymbolSource(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                                break;
-                            case "findReferences":
-                                response.Result = await FindReferences(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                                break;
-                            case "findImplementations":
-                                response.Result = await FindImplementations(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                                break;
-                            case "listMembers":
-                                response.Result = await ListMembers(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions));
-                                break;
-                            default:
-                                response.Error = new McpError { Code = -32601, Message = "Method not found", Data = $"Unknown tool: {toolCallParams.Name}" };
-                                break;
-                        }
-                        break;
-                    default:
-                        response.Error = new McpError { Code = -32601, Message = "Method not found", Data = $"Unknown method: {request.Method}" };
-                        break;
-                }
-            }
-            catch (JsonException ex)
-            {
-                response.Error = new McpError { Code = -32700, Message = "Invalid JSON input for tool", Data = ex.Message };
-            }
-            catch (Exception ex)
-            {
-                response.Error = new McpError { Code = -32000, Message = "Server error during tool execution", Data = ex.ToString() };
-            }
-
+            var response = await RouteRequest(request);
+            response.Id = request.Id;
             return response;
         }
-
-        private InitializeResult Initialize(InitializeParams args)
+        catch (JsonException ex)
         {
-            var tools = GetToolDeclarations().Tools;
-            var toolDictionary = tools.ToDictionary(t => t.Name, t => t);
-
-            return new InitializeResult
+            return new JsonRpcErrorResponse
             {
-                ProtocolVersion = "2025-11-25",
-                ServerInfo = new ServerInfo
-                {
-                    Name = "csls-mcp",
-                    Version = "0.0.1"
-                },
-                Capabilities = new ServerCapabilities
-                {
-                    Roots = new RootCapabilities
-                    {
-                        ListChanged = true
-                    },
-                    Tools = toolDictionary
-                }
+                Id = request.Id,
+                Error = new McpError { Code = -32700, Message = "Invalid JSON input for tool", Data = ex.Message }
             };
         }
-
-        /// <summary>
-        /// Returns a list of all tools exposed by this MCP server, including their names, descriptions, and input schemas.
-        /// This is part of the MCP handshake mechanism.
-        /// </summary>
-        /// <returns>An object containing a list of <see cref="ToolDeclaration"/>.</returns>
-        private GetToolDeclarationsOutput GetToolDeclarations()
+        catch (Exception ex)
         {
-            return new GetToolDeclarationsOutput
+            return new JsonRpcErrorResponse
             {
-                Tools = new List<ToolDeclaration>
-                                {
-                                    new ToolDeclaration
-                                    {
-                                        Name = "resolveSymbol",
-                                        Description = "Semantically resolves a C# symbol (class, interface, method, etc.) and returns its exact definition location. This is superior to text search as it avoids ambiguity and guarantees finding the correct definition.",
-                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                                    },
-                                    new ToolDeclaration
-                                    {
-                                        Name = "getSymbolSource",
-                                        Description = "Retrieves the exact source code block for a specific C# symbol declaration. Ideal for getting the body of a method or a class without reading and parsing an entire file.",
-                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                                    },
-                                    new ToolDeclaration
-                                    {
-                                        Name = "findReferences",
-                                        Description = "Semantically finds all references to a given C# symbol within the loaded workspace. Unlike text search, this will only find actual code references, ignoring comments and strings.",
-                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}, \"page\": {\"type\": \"integer\"}, \"pageSize\": {\"type\": \"integer\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                                    },
-                                    new ToolDeclaration
-                                    {
-                                        Name = "findImplementations",
-                                        Description = "Semantically finds all classes that implement a given C# interface. This is a powerful tool for understanding code architecture.",
-                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}, \"page\": {\"type\": \"integer\"}, \"pageSize\": {\"type\": \"integer\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                                    },
-                                    new ToolDeclaration
-                                    {
-                                        Name = "listMembers",
-                                        Description = "Lists methods, properties, and fields of a specified C# type.",
-                                        InputSchema = JsonNode.Parse("{\"type\": \"object\", \"properties\": {\"symbol\": {\"type\": \"string\"}}, \"required\": [\"symbol\"]}")?.AsObject()
-                                    }
-                                }
+                Id = request.Id,
+                Error = new McpError { Code = -32000, Message = "Server error during tool execution", Data = ex.ToString() }
             };
         }
+    }
 
-        /// <summary>
-        /// Resolves a C# symbol by its name within the loaded solution.
-        /// </summary>
-        /// <param name="input">The input containing the symbol name.</param>
-        /// <returns>Details about the resolved symbol, or a "NotFound" placeholder.</returns>
-        private async Task<ResolveSymbolOutput> ResolveSymbol(SymbolInput input)
+    private async Task<McpMessage> RouteRequest(McpRequest request)
+    {
+        return request.Method switch
         {
-            var searchCancellationToken = CancellationToken.None; // A cancellation token, can be used to cancel long-running operations.
-
-            // Use Roslyn's SymbolFinder to find source declarations matching the symbol name across the entire solution.
-            // The lambda predicate ensures a case-insensitive match.
-            var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(
-                _solution, (name) => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), searchCancellationToken);
-
-            // Prioritize an exact match (case-insensitive) first.
-            var exactMatch = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase));
-            ISymbol symbolToResolve = exactMatch ?? foundSymbols.FirstOrDefault(); // If no exact match, take the first found symbol.
-
-            if (symbolToResolve != null)
+            "initialize" => new JsonRpcResultResponse<InitializeResult>
             {
-                // Get the first source location where the symbol is declared.
-                var location = symbolToResolve.Locations.FirstOrDefault(loc => loc.IsInSource);
-                if (location != null && location.SourceTree != null)
-                {
-                    // Get the line span for the symbol's location.
-                    var lineSpan = location.SourceTree.GetLineSpan(location.SourceSpan, searchCancellationToken);
+                Result = Initialize(request.Params.Deserialize<InitializeParams>(_jsonSerializerOptions))
+            },
+            "tools/list" => new JsonRpcResultResponse<List<ToolDeclaration>> 
+            {
+                Result = GetToolDeclarations()
+            },
+            // This is a legacy/alternative name for tools/list.
+            "getToolDeclarations" => new JsonRpcResultResponse<List<ToolDeclaration>> 
+            {
+                Result = GetToolDeclarations()
+            },
+            "tools/call" => new JsonRpcResultResponse<ToolResult>
+            {
+                Result = await HandleToolCall(request.Params.Deserialize<ToolCallParams>(_jsonSerializerOptions))
+            },
+            // Direct tool calls are supported for simplicity, but tools/call is preferred.
+            "resolveSymbol" => new JsonRpcResultResponse<ToolResult> { Result = await ResolveSymbol(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions)) },
+            "getSymbolSource" => new JsonRpcResultResponse<ToolResult> { Result = await GetSymbolSource(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions)) },
+            "findReferences" => new JsonRpcResultResponse<ToolResult> { Result = await FindReferences(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions)) },
+            "findImplementations" => new JsonRpcResultResponse<ToolResult> { Result = await FindImplementations(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions)) },
+            "listMembers" => new JsonRpcResultResponse<ToolResult> { Result = await ListMembers(request.Params.Deserialize<SymbolInput>(_jsonSerializerOptions)) },
+            _ => throw new InvalidOperationException($"Unknown method: {request.Method}")
+        };
+    }
 
-                    // Return the resolved symbol's details.
-                    return new ResolveSymbolOutput
-                    {
-                        Kind = symbolToResolve.Kind.ToString(), // e.g., "Class", "Method", "Property"
-                        Name = symbolToResolve.Name,
-                        Namespace = symbolToResolve.ContainingNamespace?.ToDisplayString() ?? string.Empty, // Display full namespace name
-                        File = location.SourceTree.FilePath, // Absolute path to the source file
-                        Line = lineSpan.StartLinePosition.Line + 1 // Convert 0-indexed Roslyn line to 1-indexed for display
-                    };
+    private async Task<ToolResult> HandleToolCall(ToolCallParams? toolCallParams)
+    {
+        if (toolCallParams == null)
+        {
+            throw new JsonException("Invalid parameters for tools/call");
+        }
+
+        return toolCallParams.Name switch
+        {
+            "resolveSymbol" => await ResolveSymbol(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions)),
+            "getSymbolSource" => await GetSymbolSource(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions)),
+            "findReferences" => await FindReferences(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions)),
+            "findImplementations" => await FindImplementations(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions)),
+            "listMembers" => await ListMembers(toolCallParams.Arguments.Deserialize<SymbolInput>(_jsonSerializerOptions)),
+            _ => throw new InvalidOperationException($"Unknown tool: {toolCallParams.Name}")
+        };
+    }
+
+    private InitializeResult Initialize(InitializeParams? args)
+    {
+        var tools = GetToolDeclarations();
+        var toolDictionary = tools.ToDictionary(t => t.Name, t => t);
+
+        return new InitializeResult
+        {
+            ProtocolVersion = "2025-11-25",
+            ServerInfo = new ServerInfo { Name = "csls-mcp", Version = "0.1.0" },
+            Capabilities = new ServerCapabilities
+            {
+                Roots = new RootCapabilities { ListChanged = true },
+                Tools = toolDictionary
+            }
+        };
+    }
+
+    private List<ToolDeclaration> GetToolDeclarations()
+    {
+        return new List<ToolDeclaration>
+        {
+            new() {
+                Name = "resolveSymbol",
+                Description = "Semantically resolves a C# symbol and returns its definition location.",
+                InputSchema = JsonNode.Parse("{\"type\":\"object\",\"properties\":{\"symbol\":{\"type\":\"string\"}},\"required\":[\"symbol\"]}")!.AsObject()
+            },
+            new() {
+                Name = "getSymbolSource",
+                Description = "Retrieves the source code block for a C# symbol.",
+                InputSchema = JsonNode.Parse("{\"type\":\"object\",\"properties\":{\"symbol\":{\"type\":\"string\"}},\"required\":[\"symbol\"]}")!.AsObject()
+            },
+            new() {
+                Name = "findReferences",
+                Description = "Finds all references to a C# symbol.",
+                InputSchema = JsonNode.Parse("{\"type\":\"object\",\"properties\":{\"symbol\":{\"type\":\"string\"},\"page\":{\"type\":\"integer\"},\"pageSize\":{\"type\":\"integer\"}},\"required\":[\"symbol\"]}")!.AsObject()
+            },
+            new() {
+                Name = "findImplementations",
+                Description = "Finds all implementations of a C# interface.",
+                InputSchema = JsonNode.Parse("{\"type\":\"object\",\"properties\":{\"symbol\":{\"type\":\"string\"},\"page\":{\"type\":\"integer\"},\"pageSize\":{\"type\":\"integer\"}},\"required\":[\"symbol\"]}")!.AsObject()
+            },
+            new() {
+                Name = "listMembers",
+                Description = "Lists members of a C# type.",
+                InputSchema = JsonNode.Parse("{\"type\":\"object\",\"properties\":{\"symbol\":{\"type\":\"string\"}},\"required\":[\"symbol\"]}")!.AsObject()
+            }
+        };
+    }
+    
+    private async Task<ToolResult> ResolveSymbol(SymbolInput? input)
+    {
+        if (input == null) throw new JsonException("Input for ResolveSymbol is null.");
+        var cancellationToken = CancellationToken.None;
+
+        var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(_solution, name => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        var symbol = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase)) ?? foundSymbols.FirstOrDefault();
+
+        if (symbol?.Locations.FirstOrDefault(loc => loc.IsInSource) is { } location && location.SourceTree != null)
+        {
+            var lineSpan = location.SourceTree.GetLineSpan(location.SourceSpan, cancellationToken);
+            var result = new
+            {
+                kind = symbol.Kind.ToString(),
+                name = symbol.Name,
+                @namespace = symbol.ContainingNamespace?.ToDisplayString() ?? string.Empty,
+                file = location.SourceTree.FilePath,
+                line = lineSpan.StartLinePosition.Line + 1
+            };
+            return new ToolResult { Content = new List<McpContent> { new McpJsonContent { Json = result } } };
+        }
+
+        return new ToolResult
+        {
+            IsError = true,
+            Content = new List<McpContent> { new McpTextContent { Text = $"Error: Symbol '{input.Symbol}' not found." } }
+        };
+    }
+
+    private async Task<ToolResult> GetSymbolSource(SymbolInput? input)
+    {
+        if (input == null) throw new JsonException("Input for GetSymbolSource is null.");
+        var cancellationToken = CancellationToken.None;
+
+        var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(_solution, name => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        var symbol = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase)) ?? foundSymbols.FirstOrDefault();
+
+        if (symbol?.DeclaringSyntaxReferences.FirstOrDefault() is { } declaringReference)
+        {
+            var syntaxNode = await declaringReference.GetSyntaxAsync(cancellationToken);
+            return new ToolResult { Content = new List<McpContent> { new McpCodeContent { Code = syntaxNode.ToFullString() } } };
+        }
+        
+        return new ToolResult
+        {
+            IsError = true,
+            Content = new List<McpContent> { new McpTextContent { Text = $"Error: Source for symbol '{input.Symbol}' not found." } }
+        };
+    }
+
+    private async Task<ToolResult> FindReferences(SymbolInput? input)
+    {
+        if (input == null) throw new JsonException("Input for FindReferences is null.");
+        var cancellationToken = CancellationToken.None;
+        var locations = new List<Location>();
+
+        var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(_solution, name => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        var symbol = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase)) ?? foundSymbols.FirstOrDefault();
+
+        if (symbol != null)
+        {
+            var symbolReferences = await SymbolFinder.FindReferencesAsync(symbol, _solution, cancellationToken);
+            foreach (var reference in symbolReferences)
+            {
+                foreach (var loc in reference.Locations)
+                {
+                    var text = await loc.Document.GetTextAsync(cancellationToken);
+                    var lineSpan = text.Lines.GetLinePosition(loc.Location.SourceSpan.Start);
+                    locations.Add(new Location { File = loc.Document.FilePath ?? "Unknown", Line = lineSpan.Line + 1 });
                 }
             }
-
-            // Return a "NotFound" response if the symbol or its source location could not be determined.
-            return new ResolveSymbolOutput
-            {
-                Kind = "NotFound",
-                Name = input.Symbol,
-                Namespace = string.Empty,
-                File = string.Empty,
-                Line = 0
-            };
         }
+        
+        return CreatePaginatedResult(locations, input.Page, input.PageSize);
+    }
+    
+    private async Task<ToolResult> FindImplementations(SymbolInput? input)
+    {
+        if (input == null) throw new JsonException("Input for FindImplementations is null.");
+        var cancellationToken = CancellationToken.None;
+        var locations = new List<Location>();
 
-        /// <summary>
-        /// Retrieves the exact source code of a specified C# symbol.
-        /// </summary>
-        /// <param name="input">The input containing the symbol name.</param>
-        /// <returns>The file path and the source code snippet of the symbol's declaration.</returns>
-        private async Task<GetSymbolSourceOutput> GetSymbolSource(SymbolInput input)
+        var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(_solution, name => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        var symbol = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase)) ?? foundSymbols.FirstOrDefault();
+
+        if (symbol is INamedTypeSymbol interfaceSymbol)
         {
-            var searchCancellationToken = CancellationToken.None;
-
-            // Find the symbol declaration using SymbolFinder.
-            var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(
-                _solution, (name) => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), searchCancellationToken);
-
-            var exactMatch = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase));
-            ISymbol symbolToResolve = exactMatch ?? foundSymbols.FirstOrDefault();
-
-            if (symbolToResolve != null)
+            var implementationSymbols = await SymbolFinder.FindImplementationsAsync(interfaceSymbol, _solution, cancellationToken: cancellationToken);
+            foreach (var impl in implementationSymbols)
             {
-                // Get the first declaring syntax reference for the symbol.
-                var declaringReference = symbolToResolve.DeclaringSyntaxReferences.FirstOrDefault();
-                if (declaringReference != null)
+                if (impl.Locations.FirstOrDefault(loc => loc.IsInSource) is { } location && location.SourceTree != null)
                 {
-                    // Retrieve the SyntaxNode corresponding to the declaration.
-                    var syntaxNode = await declaringReference.GetSyntaxAsync(searchCancellationToken);
-                    // Return the file path and the full text of the syntax node.
-                    return new GetSymbolSourceOutput
-                    {
-                        File = declaringReference.SyntaxTree.FilePath,
-                        Source = syntaxNode.ToFullString()
-                    };
+                    var lineSpan = location.SourceTree.GetLineSpan(location.SourceSpan, cancellationToken);
+                    locations.Add(new Location { File = location.SourceTree.FilePath, Line = lineSpan.StartLinePosition.Line + 1 });
                 }
             }
-
-            // Return a "not found" response if the source could not be retrieved.
-            return new GetSymbolSourceOutput
-            {
-                File = string.Empty,
-                Source = "// Source for '" + input.Symbol + "' not found or could not be retrieved."
-            };
         }
+        
+        return CreatePaginatedResult(locations, input.Page, input.PageSize);
+    }
+    
+    private async Task<ToolResult> ListMembers(SymbolInput? input)
+    {
+        if (input == null) throw new JsonException("Input for ListMembers is null.");
+        var cancellationToken = CancellationToken.None;
 
-        /// <summary>
-        /// Finds all references to a specified C# symbol within the loaded solution.
-        /// </summary>
-        /// <param name="input">The input containing the symbol name.</param>
-        /// <returns>A list of locations (file path and line number) where the symbol is referenced.</returns>
-        private async Task<FindReferencesOutput> FindReferences(SymbolInput input)
+        var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(_solution, name => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        var symbol = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase)) ?? foundSymbols.FirstOrDefault();
+
+        if (symbol is not INamedTypeSymbol typeSymbol)
         {
-            var searchCancellationToken = CancellationToken.None;
-            var references = new List<Location>();
-
-            // Find the symbol declaration using SymbolFinder.
-            var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(
-                _solution, (name) => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), searchCancellationToken);
-
-            var exactMatch = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase));
-            ISymbol symbolToFind = exactMatch ?? foundSymbols.FirstOrDefault();
-
-            if (symbolToFind != null)
-            {
-                // Find all references to the identified symbol across the entire solution.
-                var symbolReferences = await SymbolFinder.FindReferencesAsync(symbolToFind, _solution, searchCancellationToken);
-
-                // Iterate through each reference and extract its location.
-                foreach (var reference in symbolReferences)
-                {
-                    foreach (var location in reference.Locations)
-                    {
-                        // Get the line position for the start of the reference's source span.
-                        var lineSpan = location.Document.GetTextAsync(searchCancellationToken).Result.Lines.GetLinePosition(location.Location.SourceSpan.Start);
-                        references.Add(new Location
-                        {
-                            File = location.Document.FilePath,
-                            Line = lineSpan.Line + 1 // Convert 0-indexed Roslyn line to 1-indexed.
-                        });
-                    }
-                }
-            }
-
-            var totalItems = references.Count;
-            var totalPages = (int)Math.Ceiling((double)totalItems / input.PageSize);
-            var itemsForPage = references.Skip((input.Page - 1) * input.PageSize).Take(input.PageSize).ToList();
-
-            return new FindReferencesOutput
-            {
-                Items = itemsForPage,
-                Page = input.Page,
-                PageSize = input.PageSize,
-                TotalItems = totalItems,
-                TotalPages = totalPages
-            };
+             return new ToolResult
+             {
+                IsError = true,
+                Content = new List<McpContent> { new McpTextContent { Text = $"Error: Symbol '{input.Symbol}' is not a type or was not found." } }
+             };
         }
 
-        private async Task<FindImplementationsOutput> FindImplementations(SymbolInput input)
+        var methods = new List<string>();
+        var properties = new List<string>();
+        var fields = new List<string>();
+
+        foreach (var member in typeSymbol.GetMembers())
         {
-            var searchCancellationToken = CancellationToken.None;
-            var implementations = new List<Location>();
+            if (member.IsImplicitlyDeclared) continue;
 
-            var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(
-                _solution, (name) => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), searchCancellationToken);
-
-            var exactMatch = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase));
-            ISymbol symbolToFind = exactMatch ?? foundSymbols.FirstOrDefault();
-
-            if (symbolToFind != null && symbolToFind is INamedTypeSymbol interfaceSymbol)
+            switch (member.Kind)
             {
-                var implementationSymbols = await SymbolFinder.FindImplementationsAsync(interfaceSymbol, _solution, cancellationToken: searchCancellationToken);
-
-                foreach (var implementation in implementationSymbols)
-                {
-                    var location = implementation.Locations.FirstOrDefault(loc => loc.IsInSource);
-                    if (location != null && location.SourceTree != null)
-                    {
-                        var lineSpan = location.SourceTree.GetLineSpan(location.SourceSpan, searchCancellationToken);
-                        implementations.Add(new Location
-                        {
-                            File = location.SourceTree.FilePath,
-                            Line = lineSpan.StartLinePosition.Line + 1
-                        });
-                    }
-                }
+                case SymbolKind.Method when member is IMethodSymbol method && method.MethodKind == MethodKind.Ordinary:
+                    methods.Add(method.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat));
+                    break;
+                case SymbolKind.Property:
+                    properties.Add(member.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat));
+                    break;
+                case SymbolKind.Field:
+                    fields.Add(member.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat));
+                    break;
             }
-
-            var totalItems = implementations.Count;
-            var totalPages = (int)Math.Ceiling((double)totalItems / input.PageSize);
-            var itemsForPage = implementations.Skip((input.Page - 1) * input.PageSize).Take(input.PageSize).ToList();
-
-            return new FindImplementationsOutput
-            {
-                Items = itemsForPage,
-                Page = input.Page,
-                PageSize = input.PageSize,
-                TotalItems = totalItems,
-                TotalPages = totalPages
-            };
         }
-
-        /// <summary>
-        /// Lists the methods, properties, and fields of a specified C# type.
-        /// </summary>
-        /// <param name="input">The input containing the type name.</param>
-        /// <returns>An object containing arrays of method, property, and field names.</returns>
-        private async Task<ListMembersOutput> ListMembers(SymbolInput input)
+        
+        var result = new { methods, properties, fields };
+        return new ToolResult { Content = new List<McpContent> { new McpJsonContent { Json = result } } };
+    }
+    
+    private ToolResult CreatePaginatedResult<T>(List<T> items, int page, int pageSize)
+    {
+        var totalItems = items.Count;
+        var totalPages = (int)Math.Ceiling((double)totalItems / pageSize);
+        var itemsForPage = items.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        
+        var paginatedResult = new PaginatedOutput<T>
         {
-            var searchCancellationToken = CancellationToken.None;
-            var output = new ListMembersOutput
-            {
-                Methods = Array.Empty<string>(),
-                Properties = Array.Empty<string>(),
-                Fields = Array.Empty<string>()
-            };
-
-            // Find the symbol declaration for the input type.
-            var foundSymbols = await SymbolFinder.FindSourceDeclarationsAsync(
-                _solution, (name) => name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase), searchCancellationToken);
-
-            var exactMatch = foundSymbols.FirstOrDefault(s => s.Name.Equals(input.Symbol, StringComparison.OrdinalIgnoreCase));
-            ISymbol symbolToExamine = exactMatch ?? foundSymbols.FirstOrDefault();
-
-            // If the symbol is a named type (class, struct, interface, enum), get its members.
-            if (symbolToExamine is INamedTypeSymbol typeSymbol)
-            {
-                var methods = new List<string>();
-                var properties = new List<string>();
-                var fields = new List<string>();
-
-                // Iterate through all members of the type.
-                foreach (var member in typeSymbol.GetMembers())
-                {
-                    // Skip members that are implicitly declared (e.g., backing fields for properties).
-                    if (member.IsImplicitlyDeclared) continue;
-
-                    // Categorize members based on their SymbolKind.
-                    switch (member.Kind)
-                    {
-                        case SymbolKind.Method:
-                            // Filter out constructors, destructors, operators, and property/event accessors.
-                            if (member is IMethodSymbol method &&
-                                method.MethodKind != MethodKind.Constructor &&
-                                method.MethodKind != MethodKind.Destructor &&
-                                method.MethodKind != MethodKind.UserDefinedOperator &&
-                                method.MethodKind != MethodKind.Conversion &&
-                                method.MethodKind != MethodKind.PropertyGet &&
-                                method.MethodKind != MethodKind.PropertySet &&
-                                method.MethodKind != MethodKind.EventAdd &&
-                                method.MethodKind != MethodKind.EventRemove)
-                            {
-                                methods.Add(method.ToDisplayString(new SymbolDisplayFormat(
-                                    globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
-                                    typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameOnly,
-                                    propertyStyle: SymbolDisplayPropertyStyle.NameOnly,
-                                    genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
-                                    memberOptions: SymbolDisplayMemberOptions.IncludeParameters,
-                                    delegateStyle: SymbolDisplayDelegateStyle.NameOnly,
-                                    extensionMethodStyle: SymbolDisplayExtensionMethodStyle.Default,
-                                    parameterOptions: SymbolDisplayParameterOptions.IncludeType | SymbolDisplayParameterOptions.IncludeName,
-                                    miscellaneousOptions: SymbolDisplayMiscellaneousOptions.None
-                                )));
-                            }
-                            break;
-                        case SymbolKind.Property:
-                            properties.Add(member.ToDisplayString(new SymbolDisplayFormat(
-                                globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
-                                typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameOnly,
-                                propertyStyle: SymbolDisplayPropertyStyle.NameOnly,
-                                memberOptions: SymbolDisplayMemberOptions.IncludeType
-                            )));
-                            break;
-                        case SymbolKind.Field:
-                            fields.Add(member.ToDisplayString(new SymbolDisplayFormat(
-                                globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
-                                typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameOnly,
-                                propertyStyle: SymbolDisplayPropertyStyle.NameOnly,
-                                memberOptions: SymbolDisplayMemberOptions.IncludeType
-                            )));
-                            break;
-                    }
-                }
-
-                output.Methods = methods.ToArray();
-                output.Properties = properties.ToArray();
-                output.Fields = fields.ToArray();
-            }
-
-            return output;
-        }
+            Items = itemsForPage,
+            Page = page,
+            PageSize = pageSize,
+            TotalItems = totalItems,
+            TotalPages = totalPages
+        };
+        
+        return new ToolResult { Content = new List<McpContent> { new McpJsonContent { Json = paginatedResult } } };
     }
 }

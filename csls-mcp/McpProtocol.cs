@@ -1,235 +1,232 @@
-using System;
-using System.Text.Json.Serialization;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
-namespace csls_mcp
+namespace csls_mcp;
+
+// Base classes for MCP messages
+public class McpMessage
 {
-    public class McpMessage
-    {
-        [JsonPropertyName("id")]
-        public object Id { get; set; }
+    [JsonPropertyName("id")]
+    public object? Id { get; set; }
 
-        [JsonPropertyName("jsonrpc")]
-        public string JsonRPC { get; set; } = "2.0";
-    }
+    [JsonPropertyName("jsonrpc")]
+    public string JsonRPC { get; set; } = "2.0";
+}
 
-    public class McpRequest : McpMessage
-    {
-        [JsonPropertyName("method")]
-        public string Method { get; set; }
+public class McpRequest : McpMessage
+{
+    [JsonPropertyName("method")]
+    public required string Method { get; set; }
 
-        [JsonPropertyName("params")]
-        public JsonNode Params { get; set; }
-    }
+    [JsonPropertyName("params")]
+    public JsonNode? Params { get; set; }
+}
 
-    public class McpResponse : McpMessage
-    {
-        [JsonPropertyName("result")]
-        public object Result { get; set; }
+// New response structure
+public class JsonRpcResultResponse<T> : McpMessage
+{
+    [JsonPropertyName("result")]
+    public T Result { get; set; }
+}
 
-        [JsonPropertyName("error")]
-        public McpError Error { get; set; }
-    }
+public class JsonRpcErrorResponse : McpMessage
+{
+    [JsonPropertyName("error")]
+    public McpError Error { get; set; }
+}
 
-    public class McpError
-    {
-        [JsonPropertyName("code")]
-        public int Code { get; set; }
+public class ToolResult
+{
+    [JsonPropertyName("content")]
+    public List<McpContent> Content { get; set; }
 
-        [JsonPropertyName("message")]
-        public string Message { get; set; }
+    [JsonPropertyName("isError")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsError { get; set; } = false;
+}
 
-        [JsonPropertyName("data")]
-        public object Data { get; set; }
-    }
+// Old response structure (to be phased out)
+// public class McpResponse : McpMessage
+// {
+//     [JsonPropertyName("content")]
+//     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+//     public List<McpContent>? Content { get; set; }
+//
+//     [JsonPropertyName("isError")]
+//     public bool IsError { get; set; } = false;
+//
+//     [JsonPropertyName("error")]
+//     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+//     public McpError? Error { get; set; }
+// }
 
-    public class InitializeParams
-    {
-        [JsonPropertyName("protocolVersion")]
-        public string ProtocolVersion { get; set; }
+// Polymorphic content items
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+[JsonDerivedType(typeof(McpTextContent), typeDiscriminator: "text")]
+[JsonDerivedType(typeof(McpCodeContent), typeDiscriminator: "code")]
+[JsonDerivedType(typeof(McpJsonContent), typeDiscriminator: "json")]
+public abstract class McpContent
+{
+}
 
-        [JsonPropertyName("capabilities")]
-        public ClientCapabilities Capabilities { get; set; }
+public class McpTextContent : McpContent
+{
+    [JsonPropertyName("text")]
+    public required string Text { get; set; }
+}
 
-        [JsonPropertyName("clientInfo")]
-        public ClientInfo ClientInfo { get; set; }
-    }
+public class McpCodeContent : McpContent
+{
+    [JsonPropertyName("language")]
+    public string Language { get; set; } = "csharp";
 
-    public class ClientCapabilities
-    {
-        [JsonPropertyName("roots")]
-        public RootCapabilities Roots { get; set; }
-    }
+    [JsonPropertyName("code")]
+    public required string Code { get; set; }
+}
 
-    public class ClientInfo
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
+public class McpJsonContent : McpContent
+{
+    [JsonPropertyName("json")]
+    public required object Json { get; set; }
+}
 
-        [JsonPropertyName("version")]
-        public string Version { get; set; }
-    }
 
-    public class InitializeResult
-    {
-        [JsonPropertyName("protocolVersion")]
-        public string ProtocolVersion { get; set; }
+public class McpError
+{
+    [JsonPropertyName("code")]
+    public int Code { get; set; }
 
-        [JsonPropertyName("serverInfo")]
-        public ServerInfo ServerInfo { get; set; }
+    [JsonPropertyName("message")]
+    public required string Message { get; set; }
 
-        [JsonPropertyName("capabilities")]
-        public ServerCapabilities Capabilities { get; set; }
-    }
+    [JsonPropertyName("data")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public object? Data { get; set; }
+}
 
-    public class ServerInfo
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
+// Initialization and capabilities (unchanged for now)
+public class InitializeParams
+{
+    [JsonPropertyName("protocolVersion")]
+    public string? ProtocolVersion { get; set; }
 
-        [JsonPropertyName("version")]
-        public string Version { get; set; }
-    }
+    [JsonPropertyName("capabilities")]
+    public ClientCapabilities? Capabilities { get; set; }
 
-    public class ServerCapabilities
-    {
-        [JsonPropertyName("roots")]
-        public RootCapabilities Roots { get; set; }
+    [JsonPropertyName("clientInfo")]
+    public ClientInfo? ClientInfo { get; set; }
+}
 
-        [JsonPropertyName("tools")]
-        public Dictionary<string, ToolDeclaration> Tools { get; set; }
-    }
+public class ClientCapabilities
+{
+    [JsonPropertyName("roots")]
+    public RootCapabilities? Roots { get; set; }
+}
 
-    public class RootCapabilities
-    {
-        [JsonPropertyName("listChanged")]
-        public bool ListChanged { get; set; }
-    }
+public class ClientInfo
+{
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
 
-    /// <summary>
-    /// Input model for tools that take a single symbol name as input.
-    /// </summary>
-    public class SymbolInput
-    {
-        [JsonPropertyName("symbol")]
-        public string Symbol { get; set; } // The name of the C# symbol.
+    [JsonPropertyName("version")]
+    public string? Version { get; set; }
+}
 
-        [JsonPropertyName("page")]
-        public int Page { get; set; } = 1;
+public class InitializeResult
+{
+    [JsonPropertyName("protocolVersion")]
+    public string ProtocolVersion { get; set; } = "1.0";
 
-        [JsonPropertyName("pageSize")]
-        public int PageSize { get; set; } = 10;
-    }
+    [JsonPropertyName("serverInfo")]
+    public required ServerInfo ServerInfo { get; set; }
 
-    /// <summary>
-    /// Output model for the 'resolveSymbol' tool.
-    /// </summary>
-    public class ResolveSymbolOutput
-    {
-        [JsonPropertyName("kind")]
-        public string Kind { get; set; } // The kind of symbol (e.g., "Class", "Method", "Property").
-        [JsonPropertyName("name")]
-        public string Name { get; set; } // The name of the symbol.
-        [JsonPropertyName("namespace")]
-        public string Namespace { get; set; } // The containing namespace of the symbol.
-        [JsonPropertyName("file")]
-        public string File { get; set; } // The absolute path to the file where the symbol is declared.
-        [JsonPropertyName("line")]
-        public int Line { get; set; } // The 1-indexed line number of the symbol's declaration.
-    }
+    [JsonPropertyName("capabilities")]
+    public required ServerCapabilities Capabilities { get; set; }
+}
 
-    /// <summary>
-    /// Output model for the 'getSymbolSource' tool.
-    /// </summary>
-    public class GetSymbolSourceOutput
-    {
-        [JsonPropertyName("file")]
-        public string File { get; set; } // The absolute path to the file containing the source.
-        [JsonPropertyName("source")]
-        public string Source { get; set; } // The exact source code of the symbol's declaration.
-    }
+public class ServerInfo
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "csls-mcp";
 
-    /// <summary>
-    /// Output model for a single reference found by the 'findReferences' tool.
-    /// </summary>
-    public class PaginatedOutput<T>
-    {
-        [JsonPropertyName("items")]
-        public List<T> Items { get; set; }
+    [JsonPropertyName("version")]
+    public string Version { get; set; } = "1.0.0";
+}
 
-        [JsonPropertyName("page")]
-        public int Page { get; set; }
+public class ServerCapabilities
+{
+    [JsonPropertyName("roots")]
+    public RootCapabilities Roots { get; set; } = new();
 
-        [JsonPropertyName("pageSize")]
-        public int PageSize { get; set; }
+    [JsonPropertyName("tools")]
+    public required Dictionary<string, ToolDeclaration> Tools { get; set; }
+}
 
-        [JsonPropertyName("totalPages")]
-        public int TotalPages { get; set; }
+public class RootCapabilities
+{
+    [JsonPropertyName("listChanged")]
+    public bool ListChanged { get; set; } = false;
+}
 
-        [JsonPropertyName("totalItems")]
-        public int TotalItems { get; set; }
-    }
+public class ToolDeclaration
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; set; }
 
-    public class FindReferencesOutput : PaginatedOutput<Location>
-    {
-    }
+    [JsonPropertyName("description")]
+    public required string Description { get; set; }
 
-    public class FindImplementationsOutput : PaginatedOutput<Location>
-    {
-    }
+    [JsonPropertyName("inputSchema")]
+    public required JsonObject InputSchema { get; set; }
+}
 
-    public class Location
-    {
-        [JsonPropertyName("file")]
-        public string File { get; set; }
+// Common input and data structures
+public class SymbolInput
+{
+    [JsonPropertyName("symbol")]
+    public required string Symbol { get; set; }
 
-        [JsonPropertyName("line")]
-        public int Line { get; set; }
-    }
+    [JsonPropertyName("page")]
+    public int Page { get; set; } = 1;
 
-    /// <summary>
-    /// Output model for the 'listMembers' tool.
-    /// </summary>
-    public class ListMembersOutput
-    {
-        [JsonPropertyName("methods")]
-        public string[] Methods { get; set; } // Array of method signatures.
-        [JsonPropertyName("properties")]
-        public string[] Properties { get; set; } // Array of property signatures.
-        [JsonPropertyName("fields")]
-        public string[] Fields { get; set; } // Array of field signatures.
-    }
+    [JsonPropertyName("pageSize")]
+    public int PageSize { get; set; } = 10;
+}
 
-    /// <summary>
-    /// Represents the declaration of a single MCP tool, used for handshake and capability discovery.
-    /// </summary>
-    public class ToolDeclaration
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; } // The programmatic name of the tool.
-        [JsonPropertyName("description")]
-        public string Description { get; set; } // A human-readable description of the tool.
-        [JsonPropertyName("inputSchema")]
-        public JsonObject InputSchema { get; set; } // A JSON schema describing the expected input for the tool.
-    }
+public class PaginatedOutput<T>
+{
+    [JsonPropertyName("items")]
+    public required List<T> Items { get; set; }
 
-    /// <summary>
-    /// Output model for the 'getToolDeclarations' tool.
-    /// </summary>
-        public class GetToolDeclarationsOutput
-        {
-            [JsonPropertyName("tools")]
-            public List<ToolDeclaration> Tools { get; set; } // A list of all tool declarations.
-        }
-    
-        public class ToolCallParams
-        {
-            [JsonPropertyName("name")]
-            public string Name { get; set; }
-    
-            [JsonPropertyName("arguments")]
-            public JsonNode Arguments { get; set; }
-        }
-    }
-    
+    [JsonPropertyName("page")]
+    public int Page { get; set; }
+
+    [JsonPropertyName("pageSize")]
+    public int PageSize { get; set; }
+
+    [JsonPropertyName("totalPages")]
+    public int TotalPages { get; set; }
+
+    [JsonPropertyName("totalItems")]
+    public int TotalItems { get; set; }
+}
+
+public class Location
+{
+    [JsonPropertyName("file")]
+    public required string File { get; set; }
+
+    [JsonPropertyName("line")]
+    public int Line { get; set; }
+}
+
+public class ToolCallParams
+{
+    [JsonPropertyName("name")]
+    public required string Name { get; set; }
+
+    [JsonPropertyName("arguments")]
+    public JsonNode? Arguments { get; set; }
+}
